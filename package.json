@@ -1,0 +1,29 @@
+{
+  "name": "voxerion-calendar",
+  "version": "1.0.0",
+  "description": "Google Apps Script application for generating meeting insights with Voxerion AI",
+  "main": "index.js",
+  "scripts": {
+    "login": "clasp login",
+    "pull": "clasp pull",
+    "push": "clasp push",
+    "watch": "clasp push --watch",
+    "open": "clasp open",
+    "deploy": "clasp deploy",
+    "versions": "clasp versions",
+    "status": "clasp status",
+    "sync": "npm run pull && git add . && git status"
+  },
+  "keywords": [
+    "google-apps-script",
+    "calendar",
+    "ai",
+    "meetings",
+    "voxerion"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@google/clasp": "^2.4.2"
+  }
+}

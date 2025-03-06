@@ -1,0 +1,76 @@
+{
+  "timeZone": "America/Sao_Paulo",
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/calendar",
+    "https://www.googleapis.com/auth/calendar.readonly",
+    "https://www.googleapis.com/auth/calendar.addons.execute",
+    "https://www.googleapis.com/auth/calendar.addons.current.event.read",
+    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive.addons.metadata.readonly",
+    "https://www.googleapis.com/auth/gmail.addons.execute",
+    "https://www.googleapis.com/auth/gmail.addons.current.action.compose",
+    "https://www.googleapis.com/auth/gmail.addons.current.message.readonly",
+    "https://www.googleapis.com/auth/script.locale",
+    "https://www.googleapis.com/auth/script.scriptapp",
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/userinfo.email"
+  ],
+  "urlFetchWhitelist": [
+    "https://api.openai.com/v1/chat/completions",
+    "https://api.openai.com/v1/assistants/",
+    "https://api.openai.com/v1/threads",
+    "https://api.openai.com/v1/threads/",
+    "https://api.openai.com/v1/assistants"
+  ],
+  "addOns": {
+    "common": {
+      "name": "Voxerion",
+      "logoUrl": "http://alyssonfranklin.com.br/insight.png",
+      "useLocaleFromApp": true,
+      "homepageTrigger": {
+        "runFunction": "onHomepageOpen",
+        "enabled": true
+      },
+      "universalActions": [
+        {
+          "label": "Learn more about Voxerion",
+          "openLink": "https://voxerion.com"
+        }
+      ]
+    },
+    "gmail": {
+      "contextualTriggers": [
+        {
+          "unconditional": {},
+          "onTriggerFunction": "onGmailMessage"
+        }
+      ],
+      "composeTrigger": {
+        "selectActions": [
+          {
+            "text": "Insert cat",
+            "runFunction": "onGmailCompose"
+          }
+        ],
+        "draftAccess": "NONE"
+      }
+    },
+    "drive": {
+      "onItemsSelectedTrigger": {
+        "runFunction": "onDriveItemsSelected"
+      }
+    },
+    "calendar": {
+      "currentEventAccess": "READ",
+      "homepageTrigger": {
+        "runFunction": "onHomepageOpen"
+      },
+      "eventOpenTrigger": {
+        "runFunction": "onCalendarEventOpen"
+      }
+    }
+  }
+}
