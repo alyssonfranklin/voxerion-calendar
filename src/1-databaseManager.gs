@@ -178,59 +178,106 @@
       }
 
       try {
-        // Try to use existing authentication if available
-        try {
-          if (this.db.getToken()) {
-            // Attempt to get user with the current token
-            const users = this.db.getEntities('users', { email: email });
-            
-            if (users && users.length > 0) {
-              const user = users[0];
-              console.log('Found user with existing token');
-              // Cache the result for 30 minutes
-              this.cache.put(cacheKey, JSON.stringify(user), 1800);
-              return user;
-            }
-          }
-        } catch (authError) {
-          console.log('Error finding user with existing token:', authError);
-        }
+        console.log(`Searching for user with email: ${email}`);
         
-        // Try to authenticate with default credentials as a fallback
-        if (this.db.tryDefaultAuth()) {
-          console.log('Authenticated with default credentials, trying again');
+        // First, let's try to authenticate using our multi-strategy approach
+        const authSuccess = this.db.tryAuth();
+        console.log(`Authentication status: ${authSuccess ? 'SUCCESS' : 'FAILED'}`);
+        
+        // Once we've tried authentication, attempt to use available API endpoints
+        
+        // List of possible user endpoint patterns to try
+        const userEndpoints = [
+          // Direct user lookup endpoints
+          { path: `/api/users/by-email/${encodeURIComponent(email)}`, method: 'get' },
+          { path: `/api/users/email/${encodeURIComponent(email)}`, method: 'get' },
+          { path: `/api/users/find/${encodeURIComponent(email)}`, method: 'get' },
+          { path: `/api/users/lookup/${encodeURIComponent(email)}`, method: 'get' },
+          { path: `/api/user/${encodeURIComponent(email)}`, method: 'get' },
+          { path: `/api/user/email/${encodeURIComponent(email)}`, method: 'get' },
           
+          // Query parameter endpoints
+          { path: `/api/users?email=${encodeURIComponent(email)}`, method: 'get' },
+          { path: `/api/users?filter=email:${encodeURIComponent(email)}`, method: 'get' },
+          { path: `/api/users?q=${encodeURIComponent(email)}`, method: 'get' },
+          
+          // POST endpoints for user lookup
+          { path: `/api/users/find`, method: 'post', payload: { email: email } },
+          { path: `/api/users/search`, method: 'post', payload: { email: email } },
+          { path: `/api/users/lookup`, method: 'post', payload: { email: email } },
+        ];
+        
+        console.log(`Trying ${userEndpoints.length} different API endpoints...`);
+        // Try each endpoint
+        for (const endpoint of userEndpoints) {
           try {
-            // Now try again with the new token
-            const users = this.db.getEntities('users', { email: email });
+            console.log(`Trying endpoint: ${endpoint.path} (${endpoint.method})`);
             
-            if (users && users.length > 0) {
-              const user = users[0];
-              console.log('Found user after default authentication');
+            const useAuth = this.db.getToken() && this.db.getToken().length > 0;
+            console.log(`Using auth: ${useAuth}`);
+            
+            let response;
+            if (endpoint.method === 'get') {
+              response = this.db.makeApiRequest(endpoint.path, endpoint.method, null, !useAuth);
+            } else {
+              response = this.db.makeApiRequest(endpoint.path, endpoint.method, endpoint.payload, !useAuth);
+            }
+            
+            // Try to extract user from various response formats
+            let user = null;
+            
+            if (response && response.data && !Array.isArray(response.data)) {
+              user = response.data;
+            } else if (response && Array.isArray(response.data) && response.data.length > 0) {
+              user = response.data[0];
+            } else if (response && response.user) {
+              user = response.user;
+            } else if (response && !response.data && !response.users && Object.keys(response).length > 0) {
+              // If the response itself looks like a user object
+              if (response.email && (response.id || response._id)) {
+                user = response;
+              }
+            } else if (response && response.users && Array.isArray(response.users) && response.users.length > 0) {
+              user = response.users[0];
+            }
+            
+            if (user) {
+              console.log(`Found user with endpoint: ${endpoint.path}`);
               // Cache the result for 30 minutes
               this.cache.put(cacheKey, JSON.stringify(user), 1800);
               return user;
             }
-          } catch (retryError) {
-            console.log('Error finding user after default authentication:', retryError);
+          } catch (endpointError) {
+            console.log(`Endpoint ${endpoint.path} failed: ${endpointError.message}`);
+            // Continue trying other endpoints
           }
         }
         
-        // If all authentication attempts fail, try a simple email lookup
-        // without any query parameters (directly on the API path)
-        try {
-          const endpoint = `/api/users/email/${encodeURIComponent(email)}`;
-          const response = this.db.makeApiRequest(endpoint, 'get', null, true);
-          
-          if (response && response.data) {
-            const user = response.data;
-            console.log('Found user with direct email endpoint');
-            // Cache the result for 30 minutes
-            this.cache.put(cacheKey, JSON.stringify(user), 1800);
-            return user;
+        // If we got here, all endpoints failed
+        console.log('All API endpoints failed to find the user');
+        
+        // Last resort: try a generic search through all users
+        if (this.db.getToken()) {
+          try {
+            console.log('Trying to search through all users...');
+            const allUsers = this.db.getEntities('users');
+            
+            if (Array.isArray(allUsers)) {
+              const foundUser = allUsers.find(user => 
+                user.email === email || 
+                user.email.toLowerCase() === email.toLowerCase()
+              );
+              
+              if (foundUser) {
+                console.log('Found user by manually filtering all users');
+                // Cache the result for 30 minutes
+                this.cache.put(cacheKey, JSON.stringify(foundUser), 1800);
+                return foundUser;
+              }
+            }
+          } catch (allUsersError) {
+            console.log('Error searching through all users:', allUsersError);
           }
-        } catch (directApiError) {
-          console.log('Direct API lookup failed:', directApiError);
         }
         
         // If we reach here, we couldn't find the user
