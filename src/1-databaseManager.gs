@@ -178,78 +178,59 @@
       }
 
       try {
-        // First, try using the checkUserExists method which is optimized for the initial lookup
-        if (typeof this.db.checkUserExists === 'function') {
-          const user = this.db.checkUserExists(email);
-          
-          if (user) {
-            console.log('Found user through checkUserExists endpoint');
-            // Cache the result for 30 minutes
-            this.cache.put(cacheKey, JSON.stringify(user), 1800);
-            return user;
-          }
-        }
-        
-        // Next, try using the direct lookup endpoint which might be public
+        // Try to use existing authentication if available
         try {
-          const endpoint = `/api/users/lookup/${encodeURIComponent(email)}`;
-          // Mark as public endpoint first to try without auth
-          const response = this.db.makeApiRequest(endpoint, 'get', null, true);
-          
-          if (response.success && response.data) {
-            const user = response.data;
-            console.log('Found user through direct lookup endpoint');
-            // Cache the result for 30 minutes
-            this.cache.put(cacheKey, JSON.stringify(user), 1800);
-            return user;
-          }
-        } catch (directLookupError) {
-          console.log('Direct user lookup failed, trying guest authentication:', directLookupError);
-        }
-        
-        // If direct public lookup fails, try to get a guest token
-        // Get a guest token for authentication
-        const guestToken = this.db.getGuestToken();
-        
-        // If we got a guest token, use it for the subsequent request
-        if (guestToken) {
-          // Save current token to restore it later
-          const currentToken = this.db.getToken();
-          
-          try {
-            // Set the guest token temporarily
-            this.db.setToken(guestToken);
-            
-            // Now try the query again with the guest token
+          if (this.db.getToken()) {
+            // Attempt to get user with the current token
             const users = this.db.getEntities('users', { email: email });
             
             if (users && users.length > 0) {
               const user = users[0];
+              console.log('Found user with existing token');
               // Cache the result for 30 minutes
               this.cache.put(cacheKey, JSON.stringify(user), 1800);
-              
-              // Restore original token
-              this.db.setToken(currentToken);
-              
               return user;
             }
-          } finally {
-            // Always restore the original token
-            this.db.setToken(currentToken);
+          }
+        } catch (authError) {
+          console.log('Error finding user with existing token:', authError);
+        }
+        
+        // Try to authenticate with default credentials as a fallback
+        if (this.db.tryDefaultAuth()) {
+          console.log('Authenticated with default credentials, trying again');
+          
+          try {
+            // Now try again with the new token
+            const users = this.db.getEntities('users', { email: email });
+            
+            if (users && users.length > 0) {
+              const user = users[0];
+              console.log('Found user after default authentication');
+              // Cache the result for 30 minutes
+              this.cache.put(cacheKey, JSON.stringify(user), 1800);
+              return user;
+            }
+          } catch (retryError) {
+            console.log('Error finding user after default authentication:', retryError);
           }
         }
         
-        // If guest auth fails, try regular authentication approach (if we have a token)
-        if (this.db.getToken()) {
-          // Get users with email filter
-          const users = this.db.getEntities('users', { email: email });
-  
-          if (users && users.length > 0) {
-            const user = users[0];
+        // If all authentication attempts fail, try a simple email lookup
+        // without any query parameters (directly on the API path)
+        try {
+          const endpoint = `/api/users/email/${encodeURIComponent(email)}`;
+          const response = this.db.makeApiRequest(endpoint, 'get', null, true);
+          
+          if (response && response.data) {
+            const user = response.data;
+            console.log('Found user with direct email endpoint');
             // Cache the result for 30 minutes
             this.cache.put(cacheKey, JSON.stringify(user), 1800);
             return user;
           }
+        } catch (directApiError) {
+          console.log('Direct API lookup failed:', directApiError);
         }
         
         // If we reach here, we couldn't find the user

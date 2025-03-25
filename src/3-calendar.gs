@@ -8,13 +8,17 @@
     constructor() {
       this.baseUrl = "https://kantor-onboarding-alysson-franklins-projects.vercel.app";
       this.apiToken = "";
-      this.guestToken = "";
       
-      // Try to get a guest token on initialization
+      // Try to load a saved token from cache
       try {
-        this.getGuestToken();
+        const cache = CacheService.getUserCache();
+        const savedToken = cache.get('VOXERION_API_TOKEN');
+        if (savedToken) {
+          this.apiToken = savedToken;
+          console.log('Loaded saved token from cache');
+        }
       } catch (e) {
-        console.log('Failed to get initial guest token:', e);
+        console.log('No saved token found in cache');
       }
     }
 
@@ -39,10 +43,10 @@
      * @param {string} endpoint - API endpoint path (e.g., '/api/users')
      * @param {string} method - HTTP method (GET, POST, PUT, DELETE)
      * @param {Object} payload - Data to send (for POST/PUT)
-     * @param {boolean} isPublic - If true, endpoint is considered public and doesn't require auth
+     * @param {boolean} noAuth - If true, don't add authorization header even if token exists
      * @return {Object} Response data
      */
-    makeApiRequest(endpoint, method, payload = null, isPublic = false) {
+    makeApiRequest(endpoint, method, payload = null, noAuth = false) {
       try {
         const url = this.baseUrl + endpoint;
 
@@ -54,8 +58,8 @@
           muteHttpExceptions: true
         };
 
-        // Add authentication if token is available and endpoint requires auth
-        if (!isPublic && this.apiToken) {
+        // Add authentication if token is available and auth is required
+        if (!noAuth && this.apiToken) {
           options.headers['Authorization'] = `Bearer ${this.apiToken}`;
         }
 
@@ -73,6 +77,13 @@
         console.log(`Response code: ${responseCode}`);
 
         if (responseCode >= 400) {
+          if (responseCode === 401 && !noAuth) {
+            // Token might be expired, clear it
+            this.apiToken = "";
+            const cache = CacheService.getUserCache();
+            cache.remove('VOXERION_API_TOKEN');
+          }
+          
           console.error(`API Error: ${responseText}`);
           throw new Error(`API Error (${responseCode}): ${responseText}`);
         }
@@ -293,18 +304,22 @@
      */
     authenticate(email, password) {
       try {
-        const endpoint = '/api/verify-password';
+        const endpoint = '/api/auth/login';
         const payload = { email, password };
 
-        // Mark this endpoint as public since we need to access it without a token
+        // This endpoint doesn't require authentication
         const response = this.makeApiRequest(endpoint, 'post', payload, true);
 
-        if (!response.success || !response.token) {
-          throw new Error(response.error || 'Authentication failed');
+        if (!response.token) {
+          throw new Error(response.message || 'Authentication failed');
         }
 
         // Set the token for subsequent requests
         this.setToken(response.token);
+        
+        // Save the token in cache for future use
+        const cache = CacheService.getUserCache();
+        cache.put('VOXERION_API_TOKEN', response.token, 60 * 60); // 1 hour expiry
 
         return {
           token: response.token,
@@ -317,38 +332,35 @@
     }
     
     /**
-     * Guest authentication for initial access
-     * Used for public endpoints that don't require full user authentication
-     * @return {string} Guest access token
+     * Try public authentication with default credentials
+     * This is a fallback method when the user isn't logged in
+     * @return {boolean} True if authentication successful
      */
-    getGuestToken() {
+    tryDefaultAuth() {
       try {
-        // Try to use cached guest token first
-        if (this.guestToken) {
-          return this.guestToken;
+        // Check if we already have a token
+        if (this.apiToken) {
+          // Try to validate it
+          try {
+            this.getEntities('users', { limit: 1 });
+            // If no error, token is valid
+            return true;
+          } catch (e) {
+            // Token is invalid, clear it
+            this.apiToken = "";
+          }
         }
         
-        const endpoint = '/api/guest-access';
-        const payload = { 
-          app_id: 'voxerion-calendar',
-          client_id: 'google-apps-script'
+        const defaultCredentials = {
+          email: 'guest@voxerion.com',
+          password: 'voxerion123'
         };
         
-        // Mark this as a public endpoint
-        const response = this.makeApiRequest(endpoint, 'post', payload, true);
-        
-        if (!response.success || !response.guest_token) {
-          throw new Error(response.error || 'Guest authentication failed');
-        }
-        
-        // Store the guest token
-        this.guestToken = response.guest_token;
-        return this.guestToken;
+        this.authenticate(defaultCredentials.email, defaultCredentials.password);
+        return true;
       } catch (error) {
-        console.error('Guest authentication error:', error);
-        
-        // Fallback to empty token which indicates public access only
-        return "";
+        console.warn('Could not authenticate with default credentials:', error);
+        return false;
       }
     }
 
