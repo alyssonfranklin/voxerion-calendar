@@ -191,6 +191,35 @@
         return false;
       }
     }
+    
+    /**
+     * Gets company by domain more efficiently using a dedicated endpoint
+     * @param {string} domain - Domain to search for
+     * @return {Object|null} Company data or null if not found
+     */
+    getCompanyByDomain(domain) {
+      try {
+        // Use a dedicated endpoint for domain lookup if available
+        const endpoint = `/api/companies/domain/${domain}`;
+        
+        try {
+          const response = this.makeApiRequest(endpoint, 'get');
+          
+          if (response.success && response.data) {
+            return response.data;
+          }
+        } catch (directEndpointError) {
+          console.log('Dedicated domain endpoint not available:', directEndpointError);
+          // Fall back to using filters via the standard endpoint if dedicated endpoint fails
+        }
+        
+        // Fall back to using the standard endpoint with a domain query parameter
+        return this.getEntities('companies', { domain: domain })[0] || null;
+      } catch (error) {
+        console.error(`Error in getCompanyByDomain for ${domain}:`, error);
+        return null;
+      }
+    }
 
     /**
      * Performs user authentication and gets token

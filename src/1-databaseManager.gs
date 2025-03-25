@@ -69,20 +69,49 @@
       }
 
       try {
-        // Since we don't have a direct endpoint to get company by domain,
-        // we need to get all companies and filter client-side
-        // In a real implementation, you'd want to add a server-side endpoint for this
-        const companies = this.db.getEntities('companies');
-
-        // Find the company with matching domain (assuming domain is stored somewhere)
-        // This may need adjustment based on your data structure
-        return companies.find(company => {
-          // If domain is a direct property
+        console.log('Looking for company with domain:', domain);
+        
+        // Use the dedicated method in DatabaseManager if available
+        if (typeof this.db.getCompanyByDomain === 'function') {
+          const company = this.db.getCompanyByDomain(domain);
+          if (company) {
+            console.log('Found company using dedicated endpoint');
+            return company;
+          }
+        }
+        
+        // If the dedicated method is not available or found no results,
+        // fall back to filtering with query parameters
+        
+        // Try direct domain property first
+        const companies = this.db.getEntities('companies', { domain: domain });
+        if (companies && companies.length > 0) {
+          console.log('Found company by direct domain query');
+          return companies[0];
+        }
+        
+        // Try domains array next
+        try {
+          const arrayCompanies = this.db.getEntities('companies', { 'domains': domain });
+          if (arrayCompanies && arrayCompanies.length > 0) {
+            console.log('Found company by domains array query');
+            return arrayCompanies[0];
+          }
+        } catch (arrayQueryError) {
+          console.log('Domains array query did not return results:', arrayQueryError);
+        }
+        
+        // Last resort - client-side filtering
+        console.log('Falling back to client-side filtering');
+        const allCompanies = this.db.getEntities('companies');
+        
+        return allCompanies.find(company => {
+          // Check domain property
           if (company.domain === domain) return true;
-
-          // If domains are stored in an array
+          
+          // Check domains array property
           if (Array.isArray(company.domains) && company.domains.includes(domain)) return true;
-
+          
           return false;
         }) || null;
       } catch (error) {
