@@ -178,23 +178,85 @@
       }
 
       try {
-        // Get users with email filter
-        // Note: The endpoint should be updated to support filtering by email
-        const users = this.db.getEntities('users', { email: email });
-
-        if (!users || users.length === 0) {
-          console.log('No user found with email:', email);
-          // If we didn't find the user, remove any cached version
-          this.cache.remove(cacheKey);
-          return null;
+        // First, try using the checkUserExists method which is optimized for the initial lookup
+        if (typeof this.db.checkUserExists === 'function') {
+          const user = this.db.checkUserExists(email);
+          
+          if (user) {
+            console.log('Found user through checkUserExists endpoint');
+            // Cache the result for 30 minutes
+            this.cache.put(cacheKey, JSON.stringify(user), 1800);
+            return user;
+          }
         }
-
-        const user = users[0];
-
-        // Cache the result for 30 minutes
-        this.cache.put(cacheKey, JSON.stringify(user), 1800);
-
-        return user;
+        
+        // Next, try using the direct lookup endpoint which might be public
+        try {
+          const endpoint = `/api/users/lookup/${encodeURIComponent(email)}`;
+          // Mark as public endpoint first to try without auth
+          const response = this.db.makeApiRequest(endpoint, 'get', null, true);
+          
+          if (response.success && response.data) {
+            const user = response.data;
+            console.log('Found user through direct lookup endpoint');
+            // Cache the result for 30 minutes
+            this.cache.put(cacheKey, JSON.stringify(user), 1800);
+            return user;
+          }
+        } catch (directLookupError) {
+          console.log('Direct user lookup failed, trying guest authentication:', directLookupError);
+        }
+        
+        // If direct public lookup fails, try to get a guest token
+        // Get a guest token for authentication
+        const guestToken = this.db.getGuestToken();
+        
+        // If we got a guest token, use it for the subsequent request
+        if (guestToken) {
+          // Save current token to restore it later
+          const currentToken = this.db.getToken();
+          
+          try {
+            // Set the guest token temporarily
+            this.db.setToken(guestToken);
+            
+            // Now try the query again with the guest token
+            const users = this.db.getEntities('users', { email: email });
+            
+            if (users && users.length > 0) {
+              const user = users[0];
+              // Cache the result for 30 minutes
+              this.cache.put(cacheKey, JSON.stringify(user), 1800);
+              
+              // Restore original token
+              this.db.setToken(currentToken);
+              
+              return user;
+            }
+          } finally {
+            // Always restore the original token
+            this.db.setToken(currentToken);
+          }
+        }
+        
+        // If guest auth fails, try regular authentication approach (if we have a token)
+        if (this.db.getToken()) {
+          // Get users with email filter
+          const users = this.db.getEntities('users', { email: email });
+  
+          if (users && users.length > 0) {
+            const user = users[0];
+            // Cache the result for 30 minutes
+            this.cache.put(cacheKey, JSON.stringify(user), 1800);
+            return user;
+          }
+        }
+        
+        // If we reach here, we couldn't find the user
+        console.log('No user found with email:', email);
+        // If we didn't find the user, remove any cached version
+        this.cache.remove(cacheKey);
+        return null;
       } catch (error) {
         console.error('Error getting user by email:', error);
         return null;

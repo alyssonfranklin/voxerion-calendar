@@ -8,6 +8,14 @@
     constructor() {
       this.baseUrl = "https://kantor-onboarding-alysson-franklins-projects.vercel.app";
       this.apiToken = "";
+      this.guestToken = "";
+      
+      // Try to get a guest token on initialization
+      try {
+        this.getGuestToken();
+      } catch (e) {
+        console.log('Failed to get initial guest token:', e);
+      }
     }
 
     /**
@@ -31,9 +39,10 @@
      * @param {string} endpoint - API endpoint path (e.g., '/api/users')
      * @param {string} method - HTTP method (GET, POST, PUT, DELETE)
      * @param {Object} payload - Data to send (for POST/PUT)
+     * @param {boolean} isPublic - If true, endpoint is considered public and doesn't require auth
      * @return {Object} Response data
      */
-    makeApiRequest(endpoint, method, payload = null) {
+    makeApiRequest(endpoint, method, payload = null, isPublic = false) {
       try {
         const url = this.baseUrl + endpoint;
 
@@ -45,8 +54,8 @@
           muteHttpExceptions: true
         };
 
-        // Add authentication if token is available
-        if (this.apiToken) {
+        // Add authentication if token is available and endpoint requires auth
+        if (!isPublic && this.apiToken) {
           options.headers['Authorization'] = `Bearer ${this.apiToken}`;
         }
 
@@ -220,6 +229,61 @@
         return null;
       }
     }
+    
+    /**
+     * Checks if a user exists by email using a dedicated public endpoint
+     * @param {string} email - Email address to check
+     * @return {Object|null} User data if found, or null
+     */
+    checkUserExists(email) {
+      try {
+        if (!email) return null;
+        
+        const endpoint = `/api/users/exists/${encodeURIComponent(email)}`;
+        
+        // Try as public endpoint first
+        try {
+          const response = this.makeApiRequest(endpoint, 'get', null, true);
+          
+          if (response.success) {
+            if (response.exists === false) {
+              // User explicitly doesn't exist
+              return null;
+            }
+            
+            // If the endpoint returns the user data directly
+            if (response.data) {
+              return response.data;
+            }
+          }
+        } catch (error) {
+          console.log('User exists check endpoint not available:', error);
+        }
+        
+        // Fallback to regular lookup via guest token
+        if (this.guestToken) {
+          const savedToken = this.apiToken;
+          
+          try {
+            this.setToken(this.guestToken);
+            const users = this.getEntities('users', { email: email, limit: 1 });
+            
+            if (users && users.length > 0) {
+              return users[0];
+            }
+            
+            return null;
+          } finally {
+            this.setToken(savedToken);
+          }
+        }
+        
+        return null;
+      } catch (error) {
+        console.error(`Error checking if user exists: ${email}`, error);
+        return null;
+      }
+    }
 
     /**
      * Performs user authentication and gets token
@@ -232,7 +296,8 @@
         const endpoint = '/api/verify-password';
         const payload = { email, password };
 
-        const response = this.makeApiRequest(endpoint, 'post', payload);
+        // Mark this endpoint as public since we need to access it without a token
+        const response = this.makeApiRequest(endpoint, 'post', payload, true);
 
         if (!response.success || !response.token) {
           throw new Error(response.error || 'Authentication failed');
@@ -248,6 +313,42 @@
       } catch (error) {
         console.error('Authentication error:', error);
         throw error;
+      }
+    }
+    
+    /**
+     * Guest authentication for initial access
+     * Used for public endpoints that don't require full user authentication
+     * @return {string} Guest access token
+     */
+    getGuestToken() {
+      try {
+        // Try to use cached guest token first
+        if (this.guestToken) {
+          return this.guestToken;
+        }
+        
+        const endpoint = '/api/guest-access';
+        const payload = { 
+          app_id: 'voxerion-calendar',
+          client_id: 'google-apps-script'
+        };
+        
+        // Mark this as a public endpoint
+        const response = this.makeApiRequest(endpoint, 'post', payload, true);
+        
+        if (!response.success || !response.guest_token) {
+          throw new Error(response.error || 'Guest authentication failed');
+        }
+        
+        // Store the guest token
+        this.guestToken = response.guest_token;
+        return this.guestToken;
+      } catch (error) {
+        console.error('Guest authentication error:', error);
+        
+        // Fallback to empty token which indicates public access only
+        return "";
       }
     }
 
