@@ -13,9 +13,14 @@
       console.log("==================================");
       
       // API configuration
-      this.baseUrl = "https://api.voxerion.com";
+      this.baseUrl = "https://data.mongodb-api.com/app/data-abcde/endpoint/data/v1";
       console.log(`API Base URL: ${this.baseUrl}`);
       this.apiToken = "";
+      
+      // MongoDB Atlas Data API configuration
+      this.dataSource = "Cluster0";
+      this.database = "voxerion";
+      this.apiKey = ""; // To be set via Data API Key from MongoDB Atlas
       
       // API endpoint structure
       this.endpoints = {
@@ -72,8 +77,8 @@
     }
 
     /**
-     * Makes an authenticated API request to the MongoDB backend
-     * @param {string} endpoint - API endpoint path (e.g., '/api/users')
+     * Makes an authenticated API request to the MongoDB Atlas Data API
+     * @param {string} endpoint - API endpoint path (e.g., '/action/find')
      * @param {string} method - HTTP method (GET, POST, PUT, DELETE)
      * @param {Object} payload - Data to send (for POST/PUT)
      * @param {boolean} noAuth - If true, don't add authorization header even if token exists
@@ -81,27 +86,53 @@
      */
     makeApiRequest(endpoint, method, payload = null, noAuth = false) {
       try {
+        // For MongoDB Data API, most operations are POST requests to specific action endpoints
         const url = this.baseUrl + endpoint;
-
+        const isDataApi = endpoint.startsWith('/action/');
+        
         const options = {
-          method: method,
+          method: method.toLowerCase(),
           headers: {
             'Content-Type': 'application/json'
           },
           muteHttpExceptions: true
         };
 
-        // Add authentication if token is available and auth is required
-        if (!noAuth && this.apiToken) {
-          options.headers['Authorization'] = `Bearer ${this.apiToken}`;
+        // Add authentication 
+        if (!noAuth) {
+          if (this.apiToken) {
+            // Use JWT token if available
+            options.headers['Authorization'] = `Bearer ${this.apiToken}`;
+          } else if (this.apiKey && isDataApi) {
+            // Use API Key for MongoDB Data API
+            options.headers['api-key'] = this.apiKey;
+          }
         }
 
-        // Add payload for POST/PUT
-        if (payload && (method === 'post' || method === 'put')) {
-          options.payload = JSON.stringify(payload);
+        // Prepare payload
+        let requestPayload = payload || {};
+        
+        // For MongoDB Data API, add standard fields for collection operations
+        if (isDataApi && (endpoint === '/action/find' || endpoint === '/action/findOne')) {
+          if (!requestPayload.dataSource) {
+            requestPayload = {
+              ...requestPayload,
+              dataSource: this.dataSource,
+              database: this.database
+            };
+          }
+        }
+
+        // Add payload for POST/PUT/PATCH
+        if ((method === 'post' || method === 'put' || method === 'patch') && requestPayload) {
+          options.payload = JSON.stringify(requestPayload);
         }
 
         console.log(`Making ${method.toUpperCase()} request to ${endpoint}`);
+        if (options.payload) {
+          console.log(`Request payload: ${options.payload.substring(0, 200)}${options.payload.length > 200 ? '...' : ''}`);
+        }
+        
         const response = UrlFetchApp.fetch(url, options);
 
         const responseCode = response.getResponseCode();
@@ -138,7 +169,56 @@
       try {
         console.log(`Getting ${entityType} with filters:`, JSON.stringify(filters));
         
-        // Build query string from filters
+        // Convert filter parameters to MongoDB query format
+        const query = {};
+        for (const key in filters) {
+          if (filters.hasOwnProperty(key) && filters[key] !== null && filters[key] !== undefined) {
+            // Handle special filter cases
+            if (key === 'limit' || key === 'page' || key === 'sort') {
+              // These are not part of the query but used for pagination/sorting
+              continue;
+            }
+            
+            // Basic equality filter
+            query[key] = filters[key];
+          }
+        }
+        
+        // Set up MongoDB Data API request payload
+        const payload = {
+          collection: entityType,
+          database: this.database,
+          dataSource: this.dataSource,
+          filter: query
+        };
+        
+        // Add options for pagination and sorting
+        if (filters.limit) {
+          payload.limit = parseInt(filters.limit);
+        }
+        
+        if (filters.sort) {
+          payload.sort = {};
+          payload.sort[filters.sort] = 1; // Default ascending
+        }
+        
+        // Try MongoDB Data API first
+        try {
+          console.log(`Using MongoDB Data API for ${entityType}`);
+          const response = this.makeApiRequest('/action/find', 'post', payload);
+          
+          if (response && response.documents) {
+            console.log(`Got ${entityType} data successfully from MongoDB Data API`);
+            return response.documents;
+          }
+        } catch (dataApiError) {
+          console.log(`MongoDB Data API failed: ${dataApiError.message}`);
+          // Fall back to REST API pattern if available
+        }
+        
+        // If Data API failed, try REST API patterns
+        
+        // Build query string from filters for REST API
         const queryParams = [];
         for (const key in filters) {
           if (filters.hasOwnProperty(key) && filters[key] !== null && filters[key] !== undefined) {
@@ -160,10 +240,10 @@
           baseEndpoint = `/api/${entityType}`;
         }
         
-        console.log(`Using base endpoint: ${baseEndpoint}`);
+        console.log(`Using REST base endpoint: ${baseEndpoint}`);
         const endpoint = `${baseEndpoint}${queryString}`;
         
-        // Try to make request
+        // Try to make REST API request
         try {
           const response = this.makeApiRequest(endpoint, 'get');
           
@@ -188,7 +268,7 @@
           
           return response.data || [];
         } catch (mainEndpointError) {
-          console.log(`Main endpoint failed: ${mainEndpointError.message}`);
+          console.log(`REST endpoint failed: ${mainEndpointError.message}`);
           
           // Try alternative endpoints for this entity type
           if (entityType === 'users') {
@@ -262,6 +342,63 @@
       try {
         console.log(`Getting ${entityType} by ID: ${id}`);
         
+        // Try MongoDB Data API first with findOne operation
+        try {
+          // MongoDB typically uses _id field, but we need to check if we have a string ID or ObjectId
+          let idField = '_id';
+          let idValue = id;
+          
+          // Try to determine if we should use _id or id
+          if (id.length !== 24 && /^[a-f0-9]{24}$/i.test(id)) {
+            // This is likely a MongoDB ObjectId
+            idField = '_id';
+          } else {
+            // This might be a custom ID
+            idField = 'id';
+          }
+          
+          const payload = {
+            collection: entityType,
+            database: this.database,
+            dataSource: this.dataSource,
+            filter: {
+              [idField]: idValue
+            }
+          };
+          
+          console.log(`Using MongoDB Data API findOne with ${idField}=${idValue}`);
+          const response = this.makeApiRequest('/action/findOne', 'post', payload);
+          
+          if (response && response.document) {
+            console.log(`Found ${entityType} by ${idField} using MongoDB Data API`);
+            return response.document;
+          }
+          
+          // If not found with the first ID field, try the alternative
+          const alternativeField = idField === '_id' ? 'id' : '_id';
+          const alternativePayload = {
+            collection: entityType,
+            database: this.database,
+            dataSource: this.dataSource,
+            filter: {
+              [alternativeField]: idValue
+            }
+          };
+          
+          console.log(`Trying MongoDB Data API findOne with ${alternativeField}=${idValue}`);
+          const alternativeResponse = this.makeApiRequest('/action/findOne', 'post', alternativePayload);
+          
+          if (alternativeResponse && alternativeResponse.document) {
+            console.log(`Found ${entityType} by ${alternativeField} using MongoDB Data API`);
+            return alternativeResponse.document;
+          }
+        } catch (dataApiError) {
+          console.log(`MongoDB Data API failed: ${dataApiError.message}`);
+          // Fall back to REST API pattern
+        }
+        
+        // If MongoDB Data API failed, try REST API approach
+        
         // Use discovered endpoints if available
         let baseEndpoint;
         
@@ -280,7 +417,7 @@
         const formattedId = id.startsWith('/') ? id.slice(1) : id;
         
         const endpoint = `${formattedBase}/${formattedId}`;
-        console.log(`Using endpoint: ${endpoint}`);
+        console.log(`Using REST endpoint: ${endpoint}`);
         
         try {
           const response = this.makeApiRequest(endpoint, 'get');
@@ -304,7 +441,7 @@
           
           return response.data || response;
         } catch (mainEndpointError) {
-          console.log(`Main endpoint failed: ${mainEndpointError.message}`);
+          console.log(`REST endpoint failed: ${mainEndpointError.message}`);
           
           // Try alternative endpoints for this entity type
           if (entityType === 'users') {
@@ -402,14 +539,58 @@
      */
     createEntity(entityType, data) {
       try {
-        const endpoint = `/api/${entityType}`;
+        console.log(`Creating new ${entityType} entity:`, JSON.stringify(data).substring(0, 200));
+        
+        // Try MongoDB Data API first
+        try {
+          const payload = {
+            collection: entityType,
+            database: this.database,
+            dataSource: this.dataSource,
+            document: data
+          };
+          
+          console.log(`Using MongoDB Data API insertOne`);
+          const response = this.makeApiRequest('/action/insertOne', 'post', payload);
+          
+          if (response && response.insertedId) {
+            console.log(`Created ${entityType} with MongoDB Data API, ID: ${response.insertedId}`);
+            
+            // Return the created entity with its ID
+            const createdEntity = {
+              ...data,
+              _id: response.insertedId
+            };
+            
+            return createdEntity;
+          }
+        } catch (dataApiError) {
+          console.log(`MongoDB Data API insertOne failed: ${dataApiError.message}`);
+          // Fall back to REST API approach
+        }
+        
+        // If MongoDB Data API failed, try REST API endpoint
+        
+        // Use discovered endpoints if available
+        let endpoint;
+        
+        if (entityType === 'users' && this.endpoints.users) {
+          endpoint = this.endpoints.users;
+        } else if (entityType === 'companies' && this.endpoints.companies) {
+          endpoint = this.endpoints.companies;
+        } else {
+          // Fall back to standard pattern
+          endpoint = `/api/${entityType}`;
+        }
+        
+        console.log(`Using REST endpoint: ${endpoint}`);
         const response = this.makeApiRequest(endpoint, 'post', data);
 
-        if (!response.success) {
+        if (response && response.success === false) {
           throw new Error(response.message || `Failed to create ${entityType}`);
         }
 
-        return response.data;
+        return response.data || response;
       } catch (error) {
         console.error(`Error in createEntity for ${entityType}:`, error);
         throw error;
@@ -425,14 +606,109 @@
      */
     updateEntity(entityType, id, data) {
       try {
-        const endpoint = `/api/${entityType}/${id}`;
+        console.log(`Updating ${entityType} with ID: ${id}`);
+        
+        // Try MongoDB Data API first
+        try {
+          // MongoDB typically uses _id field, but we need to check if we have a string ID or ObjectId
+          let idField = '_id';
+          let idValue = id;
+          
+          // Try to determine if we should use _id or id
+          if (id.length !== 24 && /^[a-f0-9]{24}$/i.test(id)) {
+            // This is likely a MongoDB ObjectId
+            idField = '_id';
+          } else {
+            // This might be a custom ID
+            idField = 'id';
+          }
+          
+          // Set up payload for updateOne operation
+          const payload = {
+            collection: entityType,
+            database: this.database,
+            dataSource: this.dataSource,
+            filter: {
+              [idField]: idValue
+            },
+            update: {
+              $set: data
+            }
+          };
+          
+          console.log(`Using MongoDB Data API updateOne with ${idField}=${idValue}`);
+          const response = this.makeApiRequest('/action/updateOne', 'post', payload);
+          
+          if (response && (response.modifiedCount > 0 || response.matchedCount > 0)) {
+            console.log(`Updated ${entityType} with MongoDB Data API, matches: ${response.matchedCount}, modified: ${response.modifiedCount}`);
+            
+            // Return the updated entity with its ID
+            return {
+              ...data,
+              [idField]: idValue,
+              _modified: response.modifiedCount > 0
+            };
+          }
+          
+          // If not found with the first ID field, try the alternative
+          const alternativeField = idField === '_id' ? 'id' : '_id';
+          const alternativePayload = {
+            collection: entityType,
+            database: this.database,
+            dataSource: this.dataSource,
+            filter: {
+              [alternativeField]: idValue
+            },
+            update: {
+              $set: data
+            }
+          };
+          
+          console.log(`Trying MongoDB Data API updateOne with ${alternativeField}=${idValue}`);
+          const alternativeResponse = this.makeApiRequest('/action/updateOne', 'post', alternativePayload);
+          
+          if (alternativeResponse && (alternativeResponse.modifiedCount > 0 || alternativeResponse.matchedCount > 0)) {
+            console.log(`Updated ${entityType} with MongoDB Data API using ${alternativeField}, matches: ${alternativeResponse.matchedCount}, modified: ${alternativeResponse.modifiedCount}`);
+            
+            return {
+              ...data,
+              [alternativeField]: idValue,
+              _modified: alternativeResponse.modifiedCount > 0
+            };
+          }
+        } catch (dataApiError) {
+          console.log(`MongoDB Data API updateOne failed: ${dataApiError.message}`);
+          // Fall back to REST API approach
+        }
+        
+        // If MongoDB Data API failed, try REST API endpoint
+        
+        // Use discovered endpoints if available
+        let baseEndpoint;
+        
+        if (entityType === 'users' && this.endpoints.users) {
+          baseEndpoint = this.endpoints.users;
+        } else if (entityType === 'companies' && this.endpoints.companies) {
+          baseEndpoint = this.endpoints.companies;
+        } else {
+          // Fall back to standard pattern
+          baseEndpoint = `/api/${entityType}`;
+        }
+        
+        // Ensure baseEndpoint doesn't end with a slash and id doesn't start with one
+        const formattedBase = baseEndpoint.endsWith('/') ? baseEndpoint.slice(0, -1) : baseEndpoint;
+        const formattedId = id.startsWith('/') ? id.slice(1) : id;
+        
+        const endpoint = `${formattedBase}/${formattedId}`;
+        
+        console.log(`Using REST endpoint: ${endpoint}`);
         const response = this.makeApiRequest(endpoint, 'put', data);
 
-        if (!response.success) {
+        if (response && response.success === false) {
           throw new Error(response.message || `Failed to update ${entityType}`);
         }
 
-        return response.data;
+        return response.data || response;
       } catch (error) {
         console.error(`Error in updateEntity for ${entityType}:`, error);
         throw error;
@@ -447,10 +723,88 @@
      */
     deleteEntity(entityType, id) {
       try {
-        const endpoint = `/api/${entityType}/${id}`;
+        console.log(`Deleting ${entityType} with ID: ${id}`);
+        
+        // Try MongoDB Data API first
+        try {
+          // MongoDB typically uses _id field, but we need to check if we have a string ID or ObjectId
+          let idField = '_id';
+          let idValue = id;
+          
+          // Try to determine if we should use _id or id
+          if (id.length !== 24 && /^[a-f0-9]{24}$/i.test(id)) {
+            // This is likely a MongoDB ObjectId
+            idField = '_id';
+          } else {
+            // This might be a custom ID
+            idField = 'id';
+          }
+          
+          // Set up payload for deleteOne operation
+          const payload = {
+            collection: entityType,
+            database: this.database,
+            dataSource: this.dataSource,
+            filter: {
+              [idField]: idValue
+            }
+          };
+          
+          console.log(`Using MongoDB Data API deleteOne with ${idField}=${idValue}`);
+          const response = this.makeApiRequest('/action/deleteOne', 'post', payload);
+          
+          if (response && response.deletedCount > 0) {
+            console.log(`Deleted ${entityType} with MongoDB Data API, count: ${response.deletedCount}`);
+            return true;
+          }
+          
+          // If not found with the first ID field, try the alternative
+          const alternativeField = idField === '_id' ? 'id' : '_id';
+          const alternativePayload = {
+            collection: entityType,
+            database: this.database,
+            dataSource: this.dataSource,
+            filter: {
+              [alternativeField]: idValue
+            }
+          };
+          
+          console.log(`Trying MongoDB Data API deleteOne with ${alternativeField}=${idValue}`);
+          const alternativeResponse = this.makeApiRequest('/action/deleteOne', 'post', alternativePayload);
+          
+          if (alternativeResponse && alternativeResponse.deletedCount > 0) {
+            console.log(`Deleted ${entityType} with MongoDB Data API using ${alternativeField}, count: ${alternativeResponse.deletedCount}`);
+            return true;
+          }
+        } catch (dataApiError) {
+          console.log(`MongoDB Data API deleteOne failed: ${dataApiError.message}`);
+          // Fall back to REST API approach
+        }
+        
+        // If MongoDB Data API failed, try REST API endpoint
+        
+        // Use discovered endpoints if available
+        let baseEndpoint;
+        
+        if (entityType === 'users' && this.endpoints.users) {
+          baseEndpoint = this.endpoints.users;
+        } else if (entityType === 'companies' && this.endpoints.companies) {
+          baseEndpoint = this.endpoints.companies;
+        } else {
+          // Fall back to standard pattern
+          baseEndpoint = `/api/${entityType}`;
+        }
+        
+        // Ensure baseEndpoint doesn't end with a slash and id doesn't start with one
+        const formattedBase = baseEndpoint.endsWith('/') ? baseEndpoint.slice(0, -1) : baseEndpoint;
+        const formattedId = id.startsWith('/') ? id.slice(1) : id;
+        
+        const endpoint = `${formattedBase}/${formattedId}`;
+        
+        console.log(`Using REST endpoint: ${endpoint}`);
         const response = this.makeApiRequest(endpoint, 'delete');
 
-        return response.success === true;
+        return response && (response.success === true || response.deleted === true || response.deletedCount > 0);
       } catch (error) {
         console.error(`Error in deleteEntity for ${entityType}:`, error);
         return false;
