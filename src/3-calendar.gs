@@ -13,7 +13,7 @@
       console.log("==================================");
       
       // API configuration
-      this.baseUrl = "https://kantor-onboarding-alysson-franklins-projects.vercel.app";
+      this.baseUrl = "https://api.voxerion.com";
       console.log(`API Base URL: ${this.baseUrl}`);
       this.apiToken = "";
       
