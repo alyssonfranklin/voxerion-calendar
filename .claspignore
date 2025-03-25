@@ -1,0 +1,7 @@
+.git/**
+node_modules/**
+*.md
+package.json
+package-lock.json
+verify-setup.js
+setup.js

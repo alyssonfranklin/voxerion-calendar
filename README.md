@@ -70,6 +70,14 @@ npm run pull
 
 ## Development Workflow
 
+### Quick Start
+
+For a quick start, use the following command to set up the project:
+
+```bash
+npm run start
+```
+
 ### Synchronizing with Google Apps Script
 
 #### Pulling changes from Google Apps Script:
@@ -84,10 +92,10 @@ npm run pull
 npm run push
 ```
 
-#### Watch for local changes and automatically push:
+#### Watch for local changes and automatically push (development mode):
 
 ```bash
-npm run watch
+npm run dev
 ```
 
 #### Open the project in the Google Apps Script editor:
@@ -96,9 +104,30 @@ npm run watch
 npm run open
 ```
 
-### Git and Google Apps Script Integration
+### GitHub Integration
 
-To maintain both Git and Google Apps Script in sync:
+This project is connected to GitHub at: https://github.com/alyssonfranklin/voxerion-calendar
+
+To set up the connection:
+
+1. Initialize local Git repository (if not already done):
+```bash
+npm run git-init
+```
+
+2. Connect to the GitHub repository:
+```bash
+npm run github-connect
+```
+
+3. Push your local changes to GitHub:
+```bash
+npm run github-push
+```
+
+### Maintaining Sync Between GitHub and Google Apps Script
+
+To maintain both GitHub and Google Apps Script in sync:
 
 1. Pull changes from Google Apps Script:
 ```bash
@@ -112,7 +141,7 @@ npm run pull
 npm run push
 ```
 
-4. Commit and push to Git:
+4. Commit and push to GitHub:
 ```bash
 git add .
 git commit -m "Your descriptive commit message"

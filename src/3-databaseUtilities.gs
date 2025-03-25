@@ -1,9 +1,23 @@
+/**
+ * Database operations class for the Voxerion application.
+ * Provides CRUD operations for company, user, and access token data.
+ * 
+ * @class DatabaseOperations
+ */
 class DatabaseOperations {
   constructor() {
     this.db = new DatabaseManager();
+    this.cache = CacheService.getScriptCache();
   }
 
-  // Company operations
+  /**
+   * Creates a new company record in the database
+   * 
+   * @param {Object} company - Company data object
+   * @param {string} company.name - Company name
+   * @param {string} company.assistant_id - OpenAI Assistant ID for the company
+   * @return {string} Generated company ID
+   */
   createCompany(company) {
     const sheet = this.db.spreadsheet.getSheetByName('Companies');
     const now = new Date().toISOString();
@@ -66,35 +80,79 @@ class DatabaseOperations {
     return userData[0]; // Return the generated ID
   }
 
-  getUserByEmail(email) {
+  /**
+   * Finds a user by their email address with cache support
+   * 
+   * @param {string} email - User's email address
+   * @param {boolean} skipCache - If true, bypasses the cache and forces a fresh lookup
+   * @return {Object|null} User data object or null if not found
+   */
+  getUserByEmail(email, skipCache = false) {
+    if (!email) {
+      console.error('Invalid email parameter');
+      return null;
+    }
+    
+    const cacheKey = `USER_${email.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    
+    // Try to get from cache first (unless skipCache is true)
+    if (!skipCache) {
+      const cachedData = this.cache.get(cacheKey);
+      if (cachedData) {
+        try {
+          return JSON.parse(cachedData);
+        } catch (e) {
+          console.log('Error parsing cached user data:', e);
+          // Continue to fetch from sheet
+        }
+      }
+    } else {
+      console.log('Skipping cache for email lookup:', email);
+    }
+    
+    // Fetch from sheet if not in cache or skipCache is true
     const sheet = this.db.spreadsheet.getSheetByName('Users');
     const data = sheet.getDataRange().getValues();
     const headers = data[0];
     
     console.log('Looking for email:', email);
-    console.log('Headers:', headers);
     
     const emailIndex = headers.indexOf('email');
-    console.log('Email column index:', emailIndex);
+    if (emailIndex === -1) {
+      console.error('Email column not found in Users sheet');
+      return null;
+    }
     
-   /* // Log all users for debugging
-    data.forEach((row, index) => {
-      if (index > 0) { // Skip header row
-        console.log(`Row ${index}: Email = ${row[emailIndex]}`);
-      }
-    }); */
-    
+    // Use find() for cleaner, more efficient lookup
     const user = data.find((row, index) => index > 0 && row[emailIndex] === email);
     
     if (!user) {
       console.log('No user found with email:', email);
+      // If we didn't find the user, remove any cached version
+      this.cache.remove(cacheKey);
       return null;
     }
     
     const result = this.rowToObject(user, headers);
-    console.log('Found user:', JSON.stringify(result));
+    
+    // Cache the result for 30 minutes
+    this.cache.put(cacheKey, JSON.stringify(result), 1800);
+    
     return result;
 }
+
+  /**
+   * Clears the cache for a specific user
+   * 
+   * @param {string} email - User's email address
+   */
+  clearUserCache(email) {
+    if (!email) return;
+    
+    const cacheKey = `USER_${email.replace(/[^a-zA-Z0-9]/g, '_')}`;
+    this.cache.remove(cacheKey);
+    console.log('Cache cleared for user:', email);
+  }
 
   // Access token operations
   createAccessToken(userId, expiresAt) {
@@ -134,21 +192,33 @@ class DatabaseOperations {
   }
 }
 
-// Database utility functions for the application
-class KantorDatabase {
+/**
+ * Main database interface for the Voxerion application.
+ * Provides methods for user authentication, access control, and data management.
+ * 
+ * @class VoxerionDatabase
+ */
+class VoxerionDatabase {
   constructor() {
     this.dbOps = new DatabaseOperations();
   }
 
-  getUserAccessDetails(email) {
+  /**
+   * Gets user access details, including company and assistant information
+   * 
+   * @param {string} email - User's email address
+   * @param {boolean} skipCache - If true, bypasses the cache for a fresh lookup
+   * @return {Object|null} User access details or null if not authorized
+   */
+  getUserAccessDetails(email, skipCache = false) {
     try {
-      console.log('Getting access details for email:', email);
+      console.log('Getting access details for email:', email, 'skipCache:', skipCache);
       
-      // Get user by exact email match
-      const user = this.dbOps.getUserByEmail(email);
+      // Get user by exact email match, with optional cache bypass
+      const user = this.dbOps.getUserByEmail(email, skipCache);
       if (!user) {
         console.log('User not found for email:', email);
-        throw new Error('User not found');
+        return null;
       }
       console.log('Found user:', JSON.stringify(user));
 
@@ -156,22 +226,31 @@ class KantorDatabase {
       const company = this.dbOps.getCompanyById(user.company_id);
       if (!company) {
         console.log('Company not found for id:', user.company_id);
-        throw new Error('Company not found');
+        return null;
       }
       console.log('Found company:', JSON.stringify(company));
       console.log('Using Assistant ID:', company.assistant_id);
 
       return {
         userId: user.id,
-        companyId: company.id,
+        companyId: company.company_id,
         assistantId: company.assistant_id,
         role: user.system_role,
         status: company.status
       };
     } catch (error) {
       console.error('Error getting user access details:', error);
-      throw error;
+      return null;
     }
+  }
+  
+  /**
+   * Clears the cache for a specific user
+   * 
+   * @param {string} email - User's email address
+   */
+  clearUserCache(email) {
+    this.dbOps.clearUserCache(email);
   }
 
   createAccessToken(email) {

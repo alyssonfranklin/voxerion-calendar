@@ -12,7 +12,14 @@
     "deploy": "clasp deploy",
     "versions": "clasp versions",
     "status": "clasp status",
-    "sync": "npm run pull && git add . && git status"
+    "sync": "npm run pull && git add . && git status",
+    "git-init": "git init && git add . && git commit -m 'Initial Voxerion project setup'",
+    "github-connect": "git remote add origin https://github.com/alyssonfranklin/voxerion-calendar.git",
+    "github-push": "git push -u origin main",
+    "start": "npm run login && npm run pull",
+    "dev": "npm run watch",
+    "setup": "node setup.js",
+    "verify": "node verify-setup.js"
   },
   "keywords": [
     "google-apps-script",
